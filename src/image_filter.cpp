@@ -6,14 +6,19 @@
 class ColorFilterNode : public rclcpp::Node
 {
 public:
-    ColorFilterNode()
+    ColorFilterNode(const std::string &image_topic)
         : Node("image_filter")
     {
+        std::string filtered_topic = image_topic + "_filtered";
+
         image_subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-            "/camera/camera/color/image_raw", 10,
+            image_topic, 10,
             std::bind(&ColorFilterNode::image_callback, this, std::placeholders::_1));
 
-        filtered_image_publisher_ = this->create_publisher<sensor_msgs::msg::Image>("/filtered_image", 10);
+        filtered_image_publisher_ = this->create_publisher<sensor_msgs::msg::Image>(filtered_topic, 10);
+
+        RCLCPP_INFO(this->get_logger(), "Subscribed to: %s", image_topic.c_str());
+        RCLCPP_INFO(this->get_logger(), "Publishing filtered images to: %s", filtered_topic.c_str());
     }
 
 private:
@@ -50,7 +55,16 @@ private:
 int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<ColorFilterNode>());
+
+    if (argc < 2)
+    {
+        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Usage: image_filter <image_topic>");
+        return 1;
+    }
+
+    std::string image_topic = argv[1];
+    auto node = std::make_shared<ColorFilterNode>(image_topic);
+    rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
 }

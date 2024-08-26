@@ -25,6 +25,7 @@ include_directories(
 add_executable(image_filter src/image_filter.cpp)
 add_executable(motion_capture src/motion_capture.cpp)
 add_executable(depth_image_filter src/depth_image_filter.cpp)
+add_executable(camera_publisher src/camera_publisher.cpp)
 
 # Link libraries
 ament_target_dependencies(image_filter 
@@ -47,6 +48,13 @@ ament_target_dependencies(depth_image_filter
   OpenCV
 )
 
+ament_target_dependencies(camera_publisher 
+  rclcpp
+  sensor_msgs 
+  cv_bridge 
+  OpenCV
+)
+
 target_link_libraries(image_filter
   ${OpenCV_LIBRARIES}
 )
@@ -60,10 +68,15 @@ target_link_libraries(depth_image_filter
   ${OpenCV_LIBRARIES}
 )
 
+target_link_libraries(camera_publisher
+  ${OpenCV_LIBRARIES}
+)
+
 install(TARGETS
   image_filter
   motion_capture
   depth_image_filter
+  camera_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
 
