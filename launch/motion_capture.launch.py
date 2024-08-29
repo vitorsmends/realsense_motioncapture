@@ -1,8 +1,22 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.substitutions import FindPackageShare
+import os
 
 def generate_launch_description():
+    rs_launch_path = os.path.join(
+        FindPackageShare('realsense2_camera').find('realsense2_camera'),
+        'launch',
+        'rs_launch.py'
+    )
+
     return LaunchDescription([
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(rs_launch_path)
+        ),
+        
         Node(
             package='realsense_motioncapture',
             executable='camera_publisher',
