@@ -55,11 +55,11 @@ private:
 int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
-
-    if (argc < 2)
+    std::string image_topic = "/camera/camera/color/image_raw";
+    
+    if (argc > 1)
     {
-        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Usage: image_filter <image_topic>");
-        return 1;
+        image_topic = argv[1];
     }
 
     std::string image_topic = argv[1];
