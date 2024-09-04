@@ -56,13 +56,12 @@ int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
     std::string image_topic = "/camera/camera/color/image_raw";
-    
+
     if (argc > 1)
     {
         image_topic = argv[1];
     }
 
-    std::string image_topic = argv[1];
     auto node = std::make_shared<ColorFilterNode>(image_topic);
     rclcpp::spin(node);
     rclcpp::shutdown();

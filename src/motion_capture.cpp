@@ -1,148 +1,117 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/opencv.hpp>
+#include <librealsense2/rs.hpp>
 
-class MarkerPositionNode : public rclcpp::Node
-{
+class RedCircleDetector : public rclcpp::Node {
 public:
-    MarkerPositionNode(const std::string &topic_xz, const std::string &topic_y, double distance_xz, double distance_y)
-        : Node("marker_position_node"), distance_xz_(distance_xz), distance_y_(distance_y)
-    {
-        image_subscription_ = this->create_subscription<sensor_msgs::msg::Image>(
-            topic_xz, 10, std::bind(&MarkerPositionNode::image_callback, this, std::placeholders::_1));
+    RedCircleDetector() : Node("red_circle_detector") {
+        color_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+            "/camera/camera/color/image_raw_filtered", 10,
+            std::bind(&RedCircleDetector::colorImageCallback, this, std::placeholders::_1)
+        );
 
-        image_subscription_y_ = this->create_subscription<sensor_msgs::msg::Image>(
-            topic_y, 10, std::bind(&MarkerPositionNode::image_callback_y, this, std::placeholders::_1));
+        depth_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+            "/camera/camera/aligned_depth_to_color/image_raw", 10,
+            std::bind(&RedCircleDetector::depthImageCallback, this, std::placeholders::_1)
+        );
 
-        position_publisher_ = this->create_publisher<geometry_msgs::msg::Point>("/marker/position", 10);
+        camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+            "/camera/camera/aligned_depth_to_color/camera_info", 10,
+            std::bind(&RedCircleDetector::cameraInfoCallback, this, std::placeholders::_1)
+        );
 
-        RCLCPP_INFO(this->get_logger(), "Subscribed to XZ topic: %s", topic_xz.c_str());
-        RCLCPP_INFO(this->get_logger(), "Subscribed to Y topic: %s", topic_y.c_str());
+        point_pub_ = this->create_publisher<geometry_msgs::msg::Point>("/marker/position", 10);
+
+        intrinsics_initialized_ = false;
+        alpha_ = 0.1;
+        prev_point_.x = 0.0;
+        prev_point_.y = 0.0;
+        prev_point_.z = 0.0;
     }
 
 private:
-    void image_callback(const sensor_msgs::msg::Image::SharedPtr msg)
-    {
-        cv::Mat image = cv_bridge::toCvShare(msg, "bgr8")->image;
-        int image_width = image.cols; // Largura da imagem em pixels
-
-        cv::Mat gray_image;
-        cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
-
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(gray_image, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-        if (!contours.empty())
-        {
-            // Encontrar o maior contorno
-            int largest_contour_index = 0;
-            double largest_area = 0;
-            for (size_t i = 0; i < contours.size(); i++)
-            {
-                double area = cv::contourArea(contours[i]);
-                if (area > largest_area)
-                {
-                    largest_area = area;
-                    largest_contour_index = i;
-                }
+    void colorImageCallback(const sensor_msgs::msg::Image::SharedPtr msg) {
+        try {
+            cv::Mat image = cv_bridge::toCvShare(msg, "bgr8")->image;
+            cv::Mat gray_image;
+            cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
+            cv::Moments m = cv::moments(gray_image, true);
+            if (m.m00 != 0) {
+                cX_ = static_cast<int>(m.m10 / m.m00);
+                cY_ = static_cast<int>(m.m01 / m.m00);
+                circle_detected_ = true;
+            } else {
+                circle_detected_ = false;
             }
-
-            cv::Moments m = cv::moments(contours[largest_contour_index]);
-            int cx = static_cast<int>(m.m10 / m.m00);
-            int cy = static_cast<int>(m.m01 / m.m00);
-
-            // Calcular a relação de pixels por cm usando a distância da câmera ao objeto
-            double pixels_per_cm_xz = static_cast<double>(image_width) / (2.0 * distance_xz_);
-
-            // Converter os valores de pixels para centímetros
-            current_x_ = static_cast<double>(cx) / pixels_per_cm_xz;
-            current_z_ = static_cast<double>(cy) / pixels_per_cm_xz;
-
-            publish_position();
+        } catch (const cv_bridge::Exception &e) {
+            RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
         }
     }
 
-    void image_callback_y(const sensor_msgs::msg::Image::SharedPtr msg)
-    {
-        cv::Mat image = cv_bridge::toCvShare(msg, "bgr8")->image;
-        int image_height = image.rows; // Altura da imagem em pixels
-
-        cv::Mat gray_image;
-        cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
-
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(gray_image, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-        if (!contours.empty())
-        {
-            int largest_contour_index = 0;
-            double largest_area = 0;
-            for (size_t i = 0; i < contours.size(); i++)
-            {
-                double area = cv::contourArea(contours[i]);
-                if (area > largest_area)
-                {
-                    largest_area = area;
-                    largest_contour_index = i;
-                }
-            }
-
-            cv::Moments m = cv::moments(contours[largest_contour_index]);
-            int cy = static_cast<int>(m.m01 / m.m00);
-
-            double pixels_per_cm_y = static_cast<double>(image_height) / (2.0 * distance_y_);
-
-            current_y_ = static_cast<double>(cy) / pixels_per_cm_y;
-
-            publish_position();
+    void depthImageCallback(const sensor_msgs::msg::Image::SharedPtr msg) {
+        if (!circle_detected_ || !intrinsics_initialized_) return;
+        
+        try {
+            cv::Mat depth_image = cv_bridge::toCvShare(msg, msg->encoding)->image;
+            uint16_t depth_value = depth_image.at<uint16_t>(cY_, cX_);
+            float pixel[2] = {static_cast<float>(cX_), static_cast<float>(cY_)};
+            float point[3];
+            rs2_deproject_pixel_to_point(point, &intrinsics_, pixel, depth_value * depth_scale_);
+            geometry_msgs::msg::Point point_msg;
+            point[0] = point[0] * 100.0;
+            point[1] = point[1] * 100.0;
+            point[2] = point[2] * 100.0;
+            point[0] = alpha_ * point[0] + (1 - alpha_) * prev_point_.x;
+            point[1] = alpha_ * point[1] + (1 - alpha_) * prev_point_.y;
+            point[2] = alpha_ * point[2] + (1 - alpha_) * prev_point_.z;
+            prev_point_.x = point[0];
+            prev_point_.y = point[1];
+            prev_point_.z = point[2];
+            point_msg.x = point[0];
+            point_msg.y = point[1];
+            point_msg.z = point[2];
+            point_pub_->publish(point_msg);
+        } catch (const cv_bridge::Exception &e) {
+            RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
         }
     }
 
-    void publish_position()
-    {
-        if (current_x_ >= 0 && current_y_ >= 0 && current_z_ >= 0)
-        {
-            geometry_msgs::msg::Point position_msg;
-            position_msg.x = current_x_;
-            position_msg.y = current_y_;
-            position_msg.z = current_z_;
-
-            position_publisher_->publish(position_msg);
-
-            current_x_ = -1;
-            current_y_ = -1;
-            current_z_ = -1;
-        }
+    void cameraInfoCallback(const sensor_msgs::msg::CameraInfo::SharedPtr msg) {
+        if (intrinsics_initialized_) return;
+        intrinsics_.width = msg->width;
+        intrinsics_.height = msg->height;
+        intrinsics_.ppx = msg->k[2];
+        intrinsics_.ppy = msg->k[5];
+        intrinsics_.fx = msg->k[0];
+        intrinsics_.fy = msg->k[4];
+        intrinsics_.model = (msg->distortion_model == "plumb_bob") ?
+                            RS2_DISTORTION_BROWN_CONRADY : RS2_DISTORTION_KANNALA_BRANDT4;
+        for (int i = 0; i < 5; ++i) intrinsics_.coeffs[i] = msg->d[i];
+        depth_scale_ = 0.001;
+        intrinsics_initialized_ = true;
     }
 
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_subscription_;
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_subscription_y_;
-    rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr position_publisher_;
-
-    double current_x_ = -1;
-    double current_y_ = -1;
-    double current_z_ = -1;
-
-    double distance_xz_;
-    double distance_y_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr color_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr depth_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
+    rclcpp::Publisher<geometry_msgs::msg::Point>::SharedPtr point_pub_;
+    rs2_intrinsics intrinsics_;
+    bool intrinsics_initialized_;
+    bool circle_detected_;
+    int cX_, cY_;
+    float depth_scale_;
+    geometry_msgs::msg::Point prev_point_;
+    float alpha_;
 };
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
-    auto node = std::make_shared<rclcpp::Node>("marker_position_node");
-
-    std::string topic_xz = node->declare_parameter<std::string>("topic_xz", "/camera_1/image_raw_filtered");
-    std::string topic_y = node->declare_parameter<std::string>("topic_y", "/camera/camera/color/image_raw_filtered");
-
-    // Distâncias em cm entre as câmeras e o objeto
-    double distance_xz = 57.0; // Distância da câmera XZ ao objeto
-    double distance_y = 97.0;  // Distância da câmera Y ao objeto
-
-    auto marker_position_node = std::make_shared<MarkerPositionNode>(topic_xz, topic_y, distance_xz, distance_y);
-    rclcpp::spin(marker_position_node);
+    auto node = std::make_shared<RedCircleDetector>();
+    rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
 }

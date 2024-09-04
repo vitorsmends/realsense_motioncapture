@@ -19,6 +19,7 @@ include_directories(
   include
   ${OpenCV_INCLUDE_DIRS}
   ${realsense2_INCLUDE_DIRS}
+  ${realsense_INCLUDE_DIR}
 )
 
 # Add executables
