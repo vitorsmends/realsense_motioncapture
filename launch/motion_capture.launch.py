@@ -14,22 +14,18 @@ def generate_launch_description():
 
     return LaunchDescription([
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(rs_launch_path)
+            PythonLaunchDescriptionSource(rs_launch_path),
+            launch_arguments={
+                'enable_rgbd': 'true',
+                'enable_sync': 'true',
+                'align_depth.enable': 'true',
+                'enable_color': 'true',
+                'enable_depth': 'true',
+                'rgb_camera.profile': '640x480x30',
+                'depth_module.profile': '640x480x30'
+            }.items()
         ),
         
-        Node(
-            package='realsense_motioncapture',
-            executable='camera_publisher',
-            name='camera_publisher',
-            output='screen'
-        ),
-        Node(
-            package='realsense_motioncapture',
-            executable='image_filter',
-            name='image_filter_camera_1',
-            output='screen',
-            arguments=['/camera_1/image_raw']
-        ),
         Node(
             package='realsense_motioncapture',
             executable='image_filter',
